@@ -7,7 +7,9 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.OpenApi.Writers;
 using Microsoft.AspNetCore;
+using Microsoft.Extensions.Options;
 using Swashbuckle.AspNetCore.Swagger;
+using Swashbuckle.AspNetCore.SwaggerGen;
 
 namespace Swashbuckle.AspNetCore.Cli
 {
@@ -32,6 +34,27 @@ namespace Swashbuckle.AspNetCore.Cli
                 c.Option("--host", "a specific host to include in the Swagger output");
                 c.Option("--basepath", "a specific basePath to inlcude in the Swagger output");
                 c.Option("--serializeasv2", "output Swagger in the V2 format rather than V3", true);
+                c.OnRun((namedArgs) =>
+                {
+                    var depsFile = namedArgs["startupassembly"].Replace(".dll", ".deps.json");
+                    var runtimeConfig = namedArgs["startupassembly"].Replace(".dll", ".runtimeconfig.json");
+
+                    var subProcess = Process.Start("dotnet", string.Format(
+                        "exec --depsfile {0} --runtimeconfig {1} {2} _{3}", // note the underscore
+                        EscapePath(depsFile),
+                        EscapePath(runtimeConfig),
+                        EscapePath(typeof(Program).GetTypeInfo().Assembly.Location),
+                        string.Join(" ", args)
+                    ));
+
+                    subProcess.WaitForExit();
+                    return subProcess.ExitCode;
+                });
+            });
+
+            runner.SubCommand("list", "list all known Swagger docs", c =>
+            {
+                c.Argument("startupassembly", "relative path to the application's startup assembly");
                 c.OnRun((namedArgs) =>
                 {
                     var depsFile = namedArgs["startupassembly"].Replace(".dll", ".deps.json");
@@ -90,6 +113,30 @@ namespace Swashbuckle.AspNetCore.Cli
 
                         if (outputPath != null)
                             Console.WriteLine($"Swagger JSON succesfully written to {outputPath}");
+                    }
+
+                    return 0;
+                });
+            });
+
+            runner.SubCommand("_list", "", c =>
+            {
+                c.Argument("startupassembly", "");
+                c.OnRun((namedArgs) =>
+                {
+                    // 1) Configure host with provided startupassembly
+                    var startupAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(
+                        Path.Combine(Directory.GetCurrentDirectory(), namedArgs["startupassembly"]));
+                    var host = WebHost.CreateDefaultBuilder()
+                        .UseStartup(startupAssembly.FullName)
+                        .Build();
+
+                    // 2) Get known Swagger docs from options
+                    var options = host.Services.GetRequiredService<IOptions<SwaggerGeneratorOptions>>();
+
+                    foreach (var (key, value) in options.Value.SwaggerDocs)
+                    {
+                        Console.WriteLine($"{key}:{value.Version}");
                     }
 
                     return 0;
